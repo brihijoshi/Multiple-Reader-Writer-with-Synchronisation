@@ -1,6 +1,5 @@
 #include<stdio.h>
 #include<pthread.h>
-#include<semaphore.h>
 #include<stdlib.h>
 #include<sys/types.h>
 #include<sys/ipc.h>
@@ -41,7 +40,7 @@ void* reader(void* j)
 	 printf("Reader %d is leaving\n",i);
 }
 void* writer(void* j)
-	{
+{
 	 int waittime;
 	 int i = (int) j;
 	 waittime = rand() % 3;
@@ -60,13 +59,13 @@ int main()
 	 int n1,n2,i;
 	 if((key = ftok("reader.c",'R')) == -1)
 	 {
-		  perror("ftok");
-		  exit(1);
+	  perror("ftok");
+	  exit(1);
 	 }
 	 if((shmid = shmget(key,SHM_SIZE,0644|IPC_CREAT)) == -1);
 	 {
 		  perror("shmget");
-	  //exit(1);
+		  //exit(1);
 	 }
 	 data = shmat(shmid,(void*)0,0);
 	 if(data == (int*)(-1))
@@ -83,7 +82,6 @@ int main()
 	 pthread_create(&tid,NULL,reader,(void*)i);
 	 for(i=0;i<n2;i++)
 	 pthread_create(&tid,NULL,writer,(void*)i);
-	 sleep(30);
+	 sleep(5);
 	 exit(0);
 }
- 
