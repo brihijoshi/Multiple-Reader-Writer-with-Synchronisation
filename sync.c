@@ -25,10 +25,11 @@
 struct element
 {
 	int val;
-	pthread_mutex_t r_lock;
-	pthread_mutex_t w_lock;
-	int num_curr_readers;
+	pthread_mutex_t lock;
+	int r_num_curr;
+	int w_num_curr;
 	pthread_mutex_t r_num_lock;
+	pthread_mutex_t w_num_lock;
 };
 
 
@@ -65,16 +66,51 @@ struct writer_args
 
 void *read_element(void *r_args)
 {
+	int value;
 	struct reader_args args = r_args;
 
 	sleep(args.r_arrival_time);
 
 	printf("Reader %d is attempting to read element %d.\n", args.r_no, args.r_index);
+
+	struct elemet e = sq->elem[args.r_index];
+
+	pthread_mutex_lock(&e.r_num_lock);
+	// If another reader already has a lock on the data element.
+	if(e.r_num_curr > 0)
+	{
+		e.r_num_curr++;
+		pthread_mutex_unlock(&e.r_num_lock);
+
+		// Obtained read access to element at this stage.
+		value = e.val;
+		sleep(5);
+		printf("The value read by reader %d is %d.\n", args.r_no, value);
+
+		pthread_mutex_lock(&e.r_num_lock);
+		e.r_num_curr--;
+		if(e.r_num_curr == 0)
+			pthread_mutex_unlock();
+	}
+	else
+	{
+		pthread_mutex_lock(&e.w_num_lock);
+		if(e.w_num_curr > 0)
+		{
+			pthread_mutex_lock(&e.lock);
+			e.r_num_curr++;
+		}
+		pthread_mutex_unlock(&e.w_num_lock);
+		pthread_mutex_unlock(&e.r_num_lock);
+	}
+
+
+	/*
 	if(pthread_mutex_trylock(&sq->elem[args.r_no].r_lock) == 0)
 	{
 		pthread_mutex_lock(&sq->elem[args.r_no].r_num_lock);
 		sq->elem[args.r_no].num_curr_readers++;
-		pthread_nutex_unlock(&sq->elem[args.r_no].r_num_lock);
+		pthread_mutex_unlock(&sq->elem[args.r_no].r_num_lock);
 
 		sleep(5);
 
@@ -82,6 +118,7 @@ void *read_element(void *r_args)
 
 		
 	}
+	*/
 }
 
 
@@ -93,7 +130,6 @@ int main()
 	int shmid;
 	pthread_t pthread;
 	int num_readers, num_writers;
-	//int read_index[1024], write_index[1024], write_value[1024];
 	struct reader_args r_args[1024];
 	struct writer_args w_args[1024];
 	
@@ -111,7 +147,7 @@ int main()
 		exit(1);
 	}
 
-	// Attaching to the shared memory segment.
+	// Attaching the shared queue to the shared memory segment.
 	sq = shmat(shmid, (void *)0, 0);
 	if(data == (char *)(-1))
 	{
@@ -124,10 +160,11 @@ int main()
 	for(i = 0; i < 5; i++)
 	{
 		sq->elem[i].val = 0;
-		pthread_mutex_init(&sq->elem[i].r_lock, NULL);
-		pthread_mutex_init(&sq->elem[i].w_lock, NULL);
-		sq->elem[i].num_curr_readers = 0;
+		pthread_mutex_init(&sq->elem[i].lock, NULL);
+		sq->elem[i].r_num_curr = 0;
+		sq->elem[i].w_num_curr = 0;
 		pthread_mutex_init(&sq->elem[i].r_num_lock, NULL);
+		pthread_mutex_init(&sq->elem[i].w_num_lock, NULL);
 	}
 
 	printf("Enter the number of readers: ");
@@ -138,12 +175,12 @@ int main()
 		r_args[i].r_no = i;
 		printf("Enter the index of the element to be read by reader %d: ", i + 1);
 		scanf("%d", &r_args.r_index[i]);
-		if(r_args.r_index[i] < 1 || r_args.r_index[i] > 5)
+		if(r_args[i].r_index < 1 || r_args[i].r_index > 5)
 			printf("The index must be between 1 and 5, try again.\n");
 		else
 		{
-			printf("Enter the arrival time of the reader: ");
-			scanf("%d", &r_args.r)
+			printf("Enter the arrival time of reader %d: ", i + 1);
+			scanf("%d", &r_args[i].r_arrival_time);
 			i++;
 		}
 	}
@@ -161,6 +198,8 @@ int main()
 		{
 			printf("Enter the value of the element to be written by writer %d: ", i + 1);
 			scanf("%d", %w_args[i].w_val);
+			printf("Enter the arrival time of writer %d: ", i + 1);
+			scanf("%d", &w_args[i].w_arrival_time);
 			i++;
 		}
 	}
