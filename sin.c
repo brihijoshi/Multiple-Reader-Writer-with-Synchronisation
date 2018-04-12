@@ -20,9 +20,11 @@
 
 int sq[MAX_SIZE];
 int F, R;
-int r_num[MAX_SIZE], w_num[MAX_SIZE];
-sem_t FR_mutex;
-sem_t r_mutex[MAX_SIZE], w_mutex[MAX_SIZE];
+int r_num[MAX_SIZE];
+sem_t r_mutex[MAX_SIZE];
+sem_t w_mutex;
+sem_t x_mutex[MAX_SIZE];
+sem_t deq_mutex, enq_mutex;
 
 
 
@@ -45,86 +47,151 @@ struct writer_args
 
 void initialize()
 {
-	// Initial queue is of size 10, initialised to all 0s.
+	// Initial queue is of size 10.
 	F = 0;
-	R = 9;
+	R = 10;
 
 	int i;
+
+	//Initialising queue to {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}.
+	for(i = F; i < R; i++)
+		sq[i] = i;
+	for(i = R; i < MAX_SIZE; i++)
+		sq[i] = 0;
+
 	for(i = 0; i < MAX_SIZE; i++)
 	{
-		sq[i] = 0;
 		r_num[i] = 0;
-		w_num[i] = 0;
 		sem_init(&r_mutex[i], 0, 1);
-		sem_init(%w_mutex[i], 0, 1);
+		sem_init(&x_mutex[i], 0, 1);
 	}
+	sem_init(&w_mutex, 0, 1);
+	sem_init(&deq_mutex, 0, 1);
+	sem_init(&enq_mutex, 0, 1);
 }
 
 
 
 void *dequeue(void *args)
 {
-	struct reader_args r_args = args;
+	struct reader_args *r_args = args;
 
-	sem_wait(&FR_mutex);
-	if(F == -1)
+	sem_wait(&deq_mutex);
+	if(F == R)
 	{
-		sem_post(&FR_mutex);
-		printf("Reader %d: Underflow: Cannot dequeue.\n", r_args.no);
+		printf("Reader %d: Underflow: Cannot dequeue.\n", r_args->no);
 	}
 	else
 	{
 		int pos = F;
-		sem_wait(&r_mutex[pos]);
+		sem_wait(&x_mutex[pos]);
+		sleep(2);
 		int val = sq[F++];
-		if(F > R)
-			F = R = -1;
-		sem_post(&FR_mutex);
-		sleep(5);
-		printf("Reader %d: The value of the dequeued element is %d.\n", r_args.no, val);
-		sem_post(&r_mutex[pos]);
+		printf("Reader %d: The value of the dequeued element is %d.\n", r_args->no, val);
+		sem_post(&x_mutex[pos]);
 	}
+	sem_post(&deq_mutex);
 }
 
 
 
 void *enqueue(void *args)
 {
-	struct writer_args w_args = args;
+	struct writer_args *w_args = args;
 
-	if(R == MAX_SIZE - 1)
-		printf("Writer %d: Overflow: Cannot enqueue.\n", w_args.no);
+	sem_wait(&w_mutex);
+	sem_wait(&enq_mutex);
+	if(R == MAX_SIZE)
+	{
+		printf("Writer %d: Overflow: Cannot enqueue.\n", w_args->no);
+	}
 	else
 	{
-		int pos = R + 1;
-		sem_wait(&w_mutex[pos]);
-		if(R == -1)
-		{
-			F = R = 0;
-			sq[R] = w_args.val;
-		}
-		else
-			sq[++R] = w_args.val;
-		sleep(5);
-		printf("Writer %d: Element having value %d has been enqueued.\n", w_args.no, w_args.val);
-		sem_post(&w_mutex[pos]);
+		int pos = R;
+		sem_wait(&x_mutex[pos]);
+		sleep(2);
+		sq[R++] = w_args->val;
+		printf("Writer %d: Element having value %d has been enqueued.\n", w_args->no, sq[pos]);
+		sem_post(&x_mutex[pos]);
 	}
+	sem_post(&enq_mutex);
+	sem_post(&w_mutex);
 }
 
 
 
 void *read_element(void *args)
 {
-	struct reader_args r_args = args;
+	struct reader_args *r_args = args;
 
-	if(F + r_args.index)
+	int pos = F + r_args->index;
+	if(pos >= MAX_SIZE)
+	{
+		printf("Reader %d: Index out of bounds.\n", r_args->no);
+	}
+	else
+	{
+		sem_wait(&r_mutex[pos]);
+		if(r_num[pos] == 0)
+		{
+			sem_wait(&x_mutex[pos]);
+			if(pos < F || pos >= R)
+			{
+				printf("Reader %d: Index out of bounds.\n", r_args->no);
+				sem_post(&x_mutex[pos]);
+				sem_post(&r_mutex[pos]);
+				return NULL;
+			}
+		}
+
+		r_num[pos]++;
+		sem_post(&r_mutex[pos]);
+
+		int val = sq[pos];
+		sleep(2);
+		printf("Reader %d: The value of the element read is %d.\n", r_args->no, val);
+
+		sem_wait(&r_mutex[pos]);
+		r_num[pos]--;
+		if(r_num[pos] == 0)
+		{
+			sem_post(&x_mutex[pos]);
+		}
+		sem_post(&r_mutex[pos]);
+	}
 }
 
 
 
 void *write_element(void *args)
 {
+	struct writer_args *w_args = args;
 
+	int pos = F + w_args->index;
+	if(pos >= MAX_SIZE)
+	{
+		printf("Writer %d: Index out of bounds.\n", w_args->no);
+	}
+	else
+	{
+		sem_wait(&w_mutex);
+		sem_wait(&x_mutex[pos]);
+
+		if(pos < F || pos >= R)
+		{
+			printf("Writer %d: Index out of bounds.\n", w_args->no);
+			sem_post(&x_mutex[pos]);
+			sem_post(&w_mutex);
+			return NULL;
+		}
+
+		sq[pos] = w_args->val;
+		sleep(2);
+		printf("Writer %d: Value %d has been written to the element.\n", w_args->no, sq[pos]);
+
+		sem_post(&x_mutex[pos]);
+		sem_post(&w_mutex);
+	}
 }
 
 
@@ -151,32 +218,6 @@ int main()
 		else
 			break;
 	}
-	i = 0;
-	while(i < num_readers)
-	{
-		r_args[i].no = i;
-		while(1)
-		{
-			printf("Select the operation to be performed:\n1. Read element\n2. Dequeue\n");
-			scanf("%d", &r_args[i].operation);
-			if(r_args[i].operation != 1 && r_args[i].operation != 2)
-				printf("Option selected must either be 1 or 2, try again.\n");
-			else
-				break;
-		}
-		if(r_args[i].operation == 1)
-		{
-			while(1)
-			{
-				printf("Enter the index of the element to be read from the front of the shared queue: ");
-				scanf("%d", r_args[i].index);
-				if(r_args[i].index < 0)
-					printf("Index must be non-negative, try again.\n");
-				else
-					break;
-			}
-		}
-	}
 
 	while(1)
 	{
@@ -187,13 +228,39 @@ int main()
 		else
 			break;
 	}
-	i = 0;
-	while(i < num_writers)
+
+	for(i = 0; i < num_readers; i++)
 	{
-		w_args[i].no = i;
+		r_args[i].no = i + 1;
 		while(1)
 		{
-			printf("Select the operation to be performed:\n1. Write element\n2. Enqueue\n");
+			printf("Select the operation to be performed by reader %d:\n1. Read element\n2. Dequeue\n", i + 1);
+			scanf("%d", &r_args[i].operation);
+			if(r_args[i].operation != 1 && r_args[i].operation != 2)
+				printf("Option selected must either be 1 or 2, try again.\n");
+			else
+				break;
+		}
+		if(r_args[i].operation == 1)
+		{
+			while(1)
+			{
+				printf("Enter the index of the element to be read from the front of the shared queue by reader %d: ", i + 1);
+				scanf("%d", &r_args[i].index);
+				if(r_args[i].index < 0)
+					printf("Index must be non-negative, try again.\n");
+				else
+					break;
+			}
+		}
+	}
+
+	for(i = 0; i < num_writers; i++)
+	{
+		w_args[i].no = i + 1;
+		while(1)
+		{
+			printf("Select the operation to be performed by writer %d:\n1. Write element\n2. Enqueue\n", i + 1);
 			scanf("%d", &w_args[i].operation);
 			if(w_args[i].operation != 1 && w_args[i].operation != 2)
 				printf("Option selected must either be 1 or 2, try again.\n");
@@ -204,16 +271,16 @@ int main()
 		{
 			while(1)
 			{
-				printf("Enter the index of the element to be written to at the rear of the shared queue: ");
-				scanf("%d", w_args[i].index);
+				printf("Enter the index of the element to be written to from the front of the shared queue by writer %d: ", i + 1);
+				scanf("%d", &w_args[i].index);
 				if(w_args[i].index < 0)
 					printf("Index must be non-negative, try again.\n");
 				else
 					break;
 			}
 		}
-		printf("Enter the value to be written: ");
-		scanf("%d", w_args[i].val);
+		printf("Enter the value to be written by writer %d: ", i + 1);
+		scanf("%d", &w_args[i].val);
 	}
 
 	for(i = 0; i < num_readers; i++)
@@ -233,7 +300,7 @@ int main()
 
 	for(i = 0; i < num_readers; i++)
 		pthread_join(r_pthread[i], NULL);
-	for(i = 0; i < num_writers, i++)
+	for(i = 0; i < num_writers; i++)
 		pthread_join(w_pthread[i], NULL);
 
 	return 0;
