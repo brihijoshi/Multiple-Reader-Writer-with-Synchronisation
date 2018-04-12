@@ -87,7 +87,7 @@ void *dequeue(void *args)
 		sem_wait(&x_mutex[pos]);
 		sleep(2);
 		int val = sq[F++];
-		printf("Reader %d: The value of the dequeued element is %d.\n", r_args->no, val);
+		printf("Reader %d: The value of the dequeued element at index %d is %d.\n", r_args->no, pos, val);
 		sem_post(&x_mutex[pos]);
 	}
 	sem_post(&deq_mutex);
@@ -111,7 +111,7 @@ void *enqueue(void *args)
 		sem_wait(&x_mutex[pos]);
 		sleep(2);
 		sq[R++] = w_args->val;
-		printf("Writer %d: Element having value %d has been enqueued.\n", w_args->no, sq[pos]);
+		printf("Writer %d: Element having value %d has been enqueued at index %d.\n", w_args->no, sq[pos], pos);
 		sem_post(&x_mutex[pos]);
 	}
 	sem_post(&enq_mutex);
@@ -124,41 +124,35 @@ void *read_element(void *args)
 {
 	struct reader_args *r_args = args;
 
-	int pos = F + r_args->index;
-	if(pos >= MAX_SIZE)
+	int pos = r_args->index;
+	
+	sem_wait(&r_mutex[pos]);
+	if(r_num[pos] == 0)
 	{
-		printf("Reader %d: Index out of bounds.\n", r_args->no);
-	}
-	else
-	{
-		sem_wait(&r_mutex[pos]);
-		if(r_num[pos] == 0)
+		sem_wait(&x_mutex[pos]);
+		if(pos < F || pos >= R)
 		{
-			sem_wait(&x_mutex[pos]);
-			if(pos < F || pos >= R)
-			{
-				printf("Reader %d: Index out of bounds.\n", r_args->no);
-				sem_post(&x_mutex[pos]);
-				sem_post(&r_mutex[pos]);
-				return NULL;
-			}
-		}
-
-		r_num[pos]++;
-		sem_post(&r_mutex[pos]);
-
-		int val = sq[pos];
-		sleep(2);
-		printf("Reader %d: The value of the element read is %d.\n", r_args->no, val);
-
-		sem_wait(&r_mutex[pos]);
-		r_num[pos]--;
-		if(r_num[pos] == 0)
-		{
+			printf("Reader %d: Index out of bounds.\n", r_args->no);
 			sem_post(&x_mutex[pos]);
+			sem_post(&r_mutex[pos]);
+			return NULL;
 		}
-		sem_post(&r_mutex[pos]);
 	}
+
+	r_num[pos]++;
+	sem_post(&r_mutex[pos]);
+
+	int val = sq[pos];
+	sleep(2);
+	printf("Reader %d: The value of the element read from index %d is %d.\n", r_args->no, pos, val);
+
+	sem_wait(&r_mutex[pos]);
+	r_num[pos]--;
+	if(r_num[pos] == 0)
+	{
+		sem_post(&x_mutex[pos]);
+	}
+	sem_post(&r_mutex[pos]);
 }
 
 
@@ -167,31 +161,25 @@ void *write_element(void *args)
 {
 	struct writer_args *w_args = args;
 
-	int pos = F + w_args->index;
-	if(pos >= MAX_SIZE)
+	int pos = w_args->index;
+
+	sem_wait(&w_mutex);
+	sem_wait(&x_mutex[pos]);
+
+	if(pos < F || pos >= R)
 	{
 		printf("Writer %d: Index out of bounds.\n", w_args->no);
-	}
-	else
-	{
-		sem_wait(&w_mutex);
-		sem_wait(&x_mutex[pos]);
-
-		if(pos < F || pos >= R)
-		{
-			printf("Writer %d: Index out of bounds.\n", w_args->no);
-			sem_post(&x_mutex[pos]);
-			sem_post(&w_mutex);
-			return NULL;
-		}
-
-		sq[pos] = w_args->val;
-		sleep(2);
-		printf("Writer %d: Value %d has been written to the element.\n", w_args->no, sq[pos]);
-
 		sem_post(&x_mutex[pos]);
 		sem_post(&w_mutex);
+		return NULL;
 	}
+
+	sq[pos] = w_args->val;
+	sleep(2);
+	printf("Writer %d: Value %d has been written to the element at index %d.\n", w_args->no, sq[pos], pos);
+
+	sem_post(&x_mutex[pos]);
+	sem_post(&w_mutex);
 }
 
 
@@ -245,10 +233,10 @@ int main()
 		{
 			while(1)
 			{
-				printf("Enter the index of the element to be read from the front of the shared queue by reader %d: ", i + 1);
+				printf("Enter the index of the element to be read by reader %d: ", i + 1);
 				scanf("%d", &r_args[i].index);
-				if(r_args[i].index < 0)
-					printf("Index must be non-negative, try again.\n");
+				if(r_args[i].index < 0 || r_args[i].index >= MAX_SIZE)
+					printf("Index must be an integer between 0 and %d, try again.\n", MAX_SIZE - 1);
 				else
 					break;
 			}
@@ -273,8 +261,8 @@ int main()
 			{
 				printf("Enter the index of the element to be written to from the front of the shared queue by writer %d: ", i + 1);
 				scanf("%d", &w_args[i].index);
-				if(w_args[i].index < 0)
-					printf("Index must be non-negative, try again.\n");
+				if(w_args[i].index < 0 || w_args[i].index >= MAX_SIZE)
+					printf("Index must be an integer between 0 and %d, try again.\n", MAX_SIZE - 1);
 				else
 					break;
 			}
