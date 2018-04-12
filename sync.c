@@ -3,122 +3,183 @@
  * Assignment 3, Part 1: Multiple reader writer with synchronization
  * Brihi Joshi (2016142)
  * Taejas Gupta (2016204)
- * April 10, 2018
- *
- * References:
- * Shared memory segments: http://docs.hfbk.net/beej.us/bgipc/output/print/bgipc_A4.pdf
+ * April 12, 2018
  */
 
 
 
-#include<stdio.h>
-#include<pthread.h>
-#include<stdlib.h>
-#include<sys/types.h>
-#include<sys/ipc.h>
-#include<sys/shm.h>
+#include <pthread.h>
+#include <semaphore.h>
+#include <stdio.h>
+#include <unistd.h>
 
-#define SHM_SIZE 1024
-
-
-
-struct element
-{
-	int val;
-	pthread_mutex_t lock;
-	int r_num_curr;
-	int w_num_curr;
-	pthread_mutex_t r_num_lock;
-	pthread_mutex_t w_num_lock;
-};
+#define MAX_SIZE 1024
+#define MAX_PTHREADS 1024
 
 
 
-// Practically an array, not a queue.
-struct shared_queue
-{
-	struct element elem[5];
-	pthread_mutex_t w_lock_queue;
-};
-
-struct shared_queue *sq;
+int sq[MAX_SIZE];
+int F, R;
+int r_num[MAX_SIZE];
+sem_t r_mutex[MAX_SIZE];
+sem_t w_mutex;
+sem_t x_mutex[MAX_SIZE];
+sem_t deq_mutex, enq_mutex;
 
 
 
 struct reader_args
 {
-	int r_no;
-	int r_index;
-	int r_arrival_time;
-}
-
-
+	int no;
+	int index;
+	int operation;
+};
 
 struct writer_args
 {
-	int w_no;
-	int w_index;
-	int w_val;
-	int w_arrival_time;
+	int no;
+	int index;
+	int val;
+	int operation;
 };
 
 
 
-void *read_element(void *r_args)
+void initialize()
 {
-	int value;
-	struct reader_args args = r_args;
+	// Initial queue is of size 10.
+	F = 0;
+	R = 10;
 
-	sleep(args.r_arrival_time);
+	int i;
 
-	printf("Reader %d is attempting to read element %d.\n", args.r_no, args.r_index);
+	//Initialising queue to {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}.
+	for(i = F; i < R; i++)
+		sq[i] = i;
+	for(i = R; i < MAX_SIZE; i++)
+		sq[i] = 0;
 
-	struct elemet e = sq->elem[args.r_index];
-
-	pthread_mutex_lock(&e.r_num_lock);
-	// If another reader already has a lock on the data element.
-	if(e.r_num_curr > 0)
+	for(i = 0; i < MAX_SIZE; i++)
 	{
-		e.r_num_curr++;
-		pthread_mutex_unlock(&e.r_num_lock);
+		r_num[i] = 0;
+		sem_init(&r_mutex[i], 0, 1);
+		sem_init(&x_mutex[i], 0, 1);
+	}
+	sem_init(&w_mutex, 0, 1);
+	sem_init(&deq_mutex, 0, 1);
+	sem_init(&enq_mutex, 0, 1);
+}
 
-		// Obtained read access to element at this stage.
-		value = e.val;
-		sleep(5);
-		printf("The value read by reader %d is %d.\n", args.r_no, value);
 
-		pthread_mutex_lock(&e.r_num_lock);
-		e.r_num_curr--;
-		if(e.r_num_curr == 0)
-			pthread_mutex_unlock();
+
+void *dequeue(void *args)
+{
+	struct reader_args *r_args = args;
+
+	sem_wait(&deq_mutex);
+	if(F == R)
+	{
+		printf("Reader %d: Underflow: Cannot dequeue.\n", r_args->no);
 	}
 	else
 	{
-		pthread_mutex_lock(&e.w_num_lock);
-		if(e.w_num_curr > 0)
-		{
-			pthread_mutex_lock(&e.lock);
-			e.r_num_curr++;
-		}
-		pthread_mutex_unlock(&e.w_num_lock);
-		pthread_mutex_unlock(&e.r_num_lock);
+		int pos = F;
+		sem_wait(&x_mutex[pos]);
+		sleep(2);
+		int val = sq[F++];
+		printf("Reader %d: The value of the element dequeued from index %d is %d.\n", r_args->no, pos, val);
+		sem_post(&x_mutex[pos]);
 	}
+	sem_post(&deq_mutex);
+}
 
 
-	/*
-	if(pthread_mutex_trylock(&sq->elem[args.r_no].r_lock) == 0)
+
+void *enqueue(void *args)
+{
+	struct writer_args *w_args = args;
+
+	sem_wait(&w_mutex);
+	sem_wait(&enq_mutex);
+	if(R == MAX_SIZE)
 	{
-		pthread_mutex_lock(&sq->elem[args.r_no].r_num_lock);
-		sq->elem[args.r_no].num_curr_readers++;
-		pthread_mutex_unlock(&sq->elem[args.r_no].r_num_lock);
-
-		sleep(5);
-
-		printf("Value read by reader %d is %d.\n", args.r_no, sq->elem[args.r_no].val);
-
-		
+		printf("Writer %d: Overflow: Cannot enqueue.\n", w_args->no);
 	}
-	*/
+	else
+	{
+		int pos = R;
+		sem_wait(&x_mutex[pos]);
+		sleep(2);
+		sq[R++] = w_args->val;
+		printf("Writer %d: Element having value %d has been enqueued at index %d.\n", w_args->no, sq[pos], pos);
+		sem_post(&x_mutex[pos]);
+	}
+	sem_post(&enq_mutex);
+	sem_post(&w_mutex);
+}
+
+
+
+void *read_element(void *args)
+{
+	struct reader_args *r_args = args;
+
+	int pos = r_args->index;
+	
+	sem_wait(&r_mutex[pos]);
+	if(r_num[pos] == 0)
+	{
+		sem_wait(&x_mutex[pos]);
+		if(pos < F || pos >= R)
+		{
+			printf("Reader %d: Index %d is out of bounds.\n", r_args->no, pos);
+			sem_post(&x_mutex[pos]);
+			sem_post(&r_mutex[pos]);
+			return NULL;
+		}
+	}
+
+	r_num[pos]++;
+	sem_post(&r_mutex[pos]);
+
+	int val = sq[pos];
+	sleep(2);
+	printf("Reader %d: The value of the element read from index %d is %d.\n", r_args->no, pos, val);
+
+	sem_wait(&r_mutex[pos]);
+	r_num[pos]--;
+	if(r_num[pos] == 0)
+	{
+		sem_post(&x_mutex[pos]);
+	}
+	sem_post(&r_mutex[pos]);
+}
+
+
+
+void *write_element(void *args)
+{
+	struct writer_args *w_args = args;
+
+	int pos = w_args->index;
+
+	sem_wait(&w_mutex);
+	sem_wait(&x_mutex[pos]);
+
+	if(pos < F || pos >= R)
+	{
+		printf("Writer %d: Index %d is out of bounds.\n", w_args->no, pos);
+		sem_post(&x_mutex[pos]);
+		sem_post(&w_mutex);
+		return NULL;
+	}
+
+	sq[pos] = w_args->val;
+	sleep(2);
+	printf("Writer %d: Value %d has been written to the element at index %d.\n", w_args->no, sq[pos], pos);
+
+	sem_post(&x_mutex[pos]);
+	sem_post(&w_mutex);
 }
 
 
@@ -126,89 +187,113 @@ void *read_element(void *r_args)
 int main()
 {
 	int i;
-	key_t key;
-	int shmid;
-	pthread_t pthread;
 	int num_readers, num_writers;
-	struct reader_args r_args[1024];
-	struct writer_args w_args[1024];
-	
-	// Making the key for the shared memory segment.
-	if((key = ftok("sync.c", 'R')) == -1)
-	{
-		perror("ftok");
-		exit(1);
-	}
 
-	// Creating a new shared memory segment or connecting to the existing segment.
-	if((shmid = shmget(key, SHM_SIZE, 0644 | IPC_CREAT)) == -1)
-	{
-		perror("shmget");
-		exit(1);
-	}
+	// Initialising shared queue and semaphores.
+	initialize();
 
-	// Attaching the shared queue to the shared memory segment.
-	sq = shmat(shmid, (void *)0, 0);
-	if(data == (char *)(-1))
-	{
-		perror("shmat");
-		exit(1);
-	}
+	pthread_t r_pthread[MAX_PTHREADS];
+	pthread_t w_pthread[MAX_PTHREADS];
+	struct reader_args r_args[MAX_PTHREADS];
+	struct writer_args w_args[MAX_PTHREADS];
 
-	// Initializing the shared queue.
-	pthread_mutex_init(&sq.w_lock_queue, NULL);
-	for(i = 0; i < 5; i++)
+	while(1)
 	{
-		sq->elem[i].val = 0;
-		pthread_mutex_init(&sq->elem[i].lock, NULL);
-		sq->elem[i].r_num_curr = 0;
-		sq->elem[i].w_num_curr = 0;
-		pthread_mutex_init(&sq->elem[i].r_num_lock, NULL);
-		pthread_mutex_init(&sq->elem[i].w_num_lock, NULL);
-	}
-
-	printf("Enter the number of readers: ");
-	scanf("%d", &num_readers);
-	i = 0;
-	while(i < num_readers)
-	{
-		r_args[i].r_no = i;
-		printf("Enter the index of the element to be read by reader %d: ", i + 1);
-		scanf("%d", &r_args.r_index[i]);
-		if(r_args[i].r_index < 1 || r_args[i].r_index > 5)
-			printf("The index must be between 1 and 5, try again.\n");
+		printf("Enter the number of readers: ");
+		scanf("%d", &num_readers);
+		if(num_readers < 0 || num_readers > MAX_PTHREADS)
+			printf("Number of readers must be an integer between 0 and %d, try again.\n", MAX_PTHREADS);
 		else
-		{
-			printf("Enter the arrival time of reader %d: ", i + 1);
-			scanf("%d", &r_args[i].r_arrival_time);
-			i++;
-		}
-	}
-	printf("Enter the number of writers: ");
-	scanf("%d", &num_writers);
-	i = 0;
-	while(i < num_writers)
-	{
-		w_args[i].w_no = i;
-		printf("Enter the index of the element to be written to by writer %d: ", i + 1);
-		scanf("%d", &w_args[i].w_index);
-		if(w_args[i].w_index < 1 || w_args[i].w_index > 5)
-			printf("The index must be between 1 and 5, try again.\n");
-		else
-		{
-			printf("Enter the value of the element to be written by writer %d: ", i + 1);
-			scanf("%d", %w_args[i].w_val);
-			printf("Enter the arrival time of writer %d: ", i + 1);
-			scanf("%d", &w_args[i].w_arrival_time);
-			i++;
-		}
+			break;
 	}
 
-	// Creating and executing the threads.
+	while(1)
+	{
+		printf("Enter the number of writers: ");
+		scanf("%d", &num_writers);
+		if(num_writers < 0 || num_writers > MAX_PTHREADS)
+			printf("Number of writers must be an integer between 0 and %d, try again.\n", MAX_PTHREADS);
+		else
+			break;
+	}
+
 	for(i = 0; i < num_readers; i++)
-		pthread_create(&pthread, NULL, read_element, (void *)&r_args[i]);
+	{
+		r_args[i].no = i + 1;
+		while(1)
+		{
+			printf("Select the operation to be performed by reader %d:\n1. Read element\n2. Dequeue\n", i + 1);
+			scanf("%d", &r_args[i].operation);
+			if(r_args[i].operation != 1 && r_args[i].operation != 2)
+				printf("Option selected must either be 1 or 2, try again.\n");
+			else
+				break;
+		}
+		if(r_args[i].operation == 1)
+		{
+			while(1)
+			{
+				printf("Enter the index of the element to be read by reader %d: ", i + 1);
+				scanf("%d", &r_args[i].index);
+				if(r_args[i].index < 0 || r_args[i].index >= MAX_SIZE)
+					printf("Index must be an integer between 0 and %d, try again.\n", MAX_SIZE - 1);
+				else
+					break;
+			}
+		}
+	}
+
+	printf("\n");
+
 	for(i = 0; i < num_writers; i++)
-		pthread_create(&pthread, NULL, write_element, (void *)&w_args[i]);
+	{
+		w_args[i].no = i + 1;
+		while(1)
+		{
+			printf("Select the operation to be performed by writer %d:\n1. Write element\n2. Enqueue\n", i + 1);
+			scanf("%d", &w_args[i].operation);
+			if(w_args[i].operation != 1 && w_args[i].operation != 2)
+				printf("Option selected must either be 1 or 2, try again.\n");
+			else
+				break;
+		}
+		if(w_args[i].operation == 1)
+		{
+			while(1)
+			{
+				printf("Enter the index of the element to be written to by writer %d: ", i + 1);
+				scanf("%d", &w_args[i].index);
+				if(w_args[i].index < 0 || w_args[i].index >= MAX_SIZE)
+					printf("Index must be an integer between 0 and %d, try again.\n", MAX_SIZE - 1);
+				else
+					break;
+			}
+		}
+		printf("Enter the value to be written by writer %d: ", i + 1);
+		scanf("%d", &w_args[i].val);
+	}
+
+	printf("\n");
+
+	for(i = 0; i < num_readers; i++)
+	{
+		if(r_args[i].operation == 1)
+			pthread_create(&r_pthread[i], NULL, read_element, (void *)&r_args[i]);
+		else
+			pthread_create(&r_pthread[i], NULL, dequeue, (void *)&r_args[i]);
+	}
+	for(i = 0; i < num_writers; i++)
+	{
+		if(w_args[i].operation == 1)
+			pthread_create(&w_pthread[i], NULL, write_element, (void *)&w_args[i]);
+		else
+			pthread_create(&w_pthread[i], NULL, enqueue, (void *)&w_args[i]);
+	}
+
+	for(i = 0; i < num_readers; i++)
+		pthread_join(r_pthread[i], NULL);
+	for(i = 0; i < num_writers; i++)
+		pthread_join(w_pthread[i], NULL);
 
 	return 0;
 }
