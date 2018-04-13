@@ -36,7 +36,7 @@ April 13, 2018
 
 		For each writer, the user is asked to select whether he/she would like the writer to (1) write to an arbitrary element on the shared queue or (2) enqueue a new element at the rear of the shared queue. If the user selects option 1, then the user is additionally prompted to enter another integer between 0 and 1023, corresponding to the index of the element in the array to which the writer has to write. Finally, the user is prompted to enter the value to be written by that writer, which can be any integer value.
 
-		Two struct arrays (r_args and w_args) of types reader_args and writer_args (defined in the program) respectively are maintained for storing the user imput data. The user input information for the (i+1)th reader is stored in the element at the (i)th index of r_args and the user input information for the (j+1)th writer is stores in the element at the (j)th index of w_args (0 indexed).
+		Two struct arrays (r_args and w_args) of types reader_args and writer_args (defined in the program) respectively are maintained for storing the user imput data. The user input information for the (i+1)th reader is stored in the element at the (i)th index of r_args and the user input information for the (j+1)th writer is stored in the element at the (j)th index of w_args (0 indexed).
 
 		For each reader and writer, a pthread is created using pthread_create with the function corresponding to the option selected by the user and the corresponding element of r_args or w_args being passed as the argument.
 
